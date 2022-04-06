@@ -1,0 +1,103 @@
+# задача программы:
+# 1 приссоединиться к БД Clickhouse
+# 2 sql запросом на компьютер выгрузить в формате csv данные о пользователях
+# 3 сделать ежедневные выгрузку за указанный период
+
+# Импортируем библиотеку, соответствующую типу нашей базы данных
+import csv
+import time
+from datetime import date
+from clickhouse_driver import Client
+
+# Создаем соединение с нашей базой данных
+server = 'server'
+username = 'username'
+password = 'password'
+client = Client(server, user=username, password=password)
+
+
+# Делаем SELECT запрос к базе данных, используя обычный SQL-синтаксис
+# Длинные запросы можно разбивать на несколько строк в произвольном порядке, если они заключены в тройные кавычки ('''…''') или ("""...""")
+
+def export_request(len_date_in):
+    """
+    makes an sql query to the clickhouse database and saves the result to a file
+
+    :param len_date_in: input how many days until today you need in sql query
+    """
+    len_date = len_date_in
+    sqlcode = f"""
+    --- за определенный день-------------------------
+    --clients web services
+
+    --Сбор информации о пользовании отдельными веб-сервисами UP fttx
+    SELECT Date(end_time) AS day_date, msisdn, 
+    CASE
+    	WHEN ssl_server_name = 'appopenapi.a1.by' THEN 'A1 app'
+    	WHEN ssl_server_name != 'appopenapi.a1.by'  AND ssl_server_name like '%a1.by' THEN 'A1 site'
+    	WHEN ssl_server_name = 'lifegoapi.life.com.by' THEN 'life app'
+    	WHEN ssl_server_name != 'lifegoapi.life.com.by'  AND ssl_server_name like '%life.com.by' THEN 'life site'
+    	WHEN ssl_server_name LIKE '%.music.yandex.%' THEN 'yandex music (не весь трафик)'
+    	WHEN ssl_server_name LIKE '%kinopoisk.ru' THEN 'Кинопоиск (не весь трафик)'
+    	WHEN ssl_server_name LIKE '%.yandex.%' THEN 'yandex весь трафик (music, Кинопоиск и др.)'
+    	WHEN ssl_server_name LIKE '%ivi.ru' THEN 'ivi'
+    	WHEN ssl_server_name LIKE '%zvuk.com' OR ssl_server_name LIKE '%kraken.rambler.ru' OR ssl_server_name LIKE '%zvooq.com' THEN 'СберЗвук'
+    	WHEN ssl_server_name LIKE '%okko.tv' OR ssl_server_name LIKE '%playfamily.ru' THEN 'OKKO'
+    END AS application,
+    SUM(bytes_dl) AS dl, SUM(bytes_ul) AS ul, dl+ul AS sum_dl_ul, 'FTTX' AS RatType
+    FROM ioss_probe.gtp_u_sharded
+    WHERE Date(end_time) = yesterday()-{len_date}
+    AND protocol = 0 /*protocol 0 - FTTx, 4 - Mobile*/
+    AND (
+    	ssl_server_name like '%a1.by' 
+    	OR ssl_server_name like '%life.com.by'
+    	OR ssl_server_name LIKE '%.yandex.%'
+    	OR ssl_server_name LIKE '%kinopoisk.ru'
+    	OR ssl_server_name LIKE '%ivi.ru' -- ivi
+    	OR ssl_server_name LIKE '%zvuk.com' OR ssl_server_name LIKE '%kraken.rambler.ru' OR ssl_server_name LIKE '%zvooq.com'
+    	OR ssl_server_name LIKE '%okko.tv' OR ssl_server_name LIKE '%playfamily.ru'
+    	)
+    GROUP BY day_date, msisdn, application
+    UNION ALL 
+    --Сбор информации о пользовании отдельными веб-сервисами
+    SELECT Date(END_TIME) AS day_date, RADIUS_ID AS msisdn, 
+    CASE
+    	WHEN P2P_TLS_SNI = 'appopenapi.a1.by' THEN 'A1 app'
+    	WHEN P2P_TLS_SNI != 'appopenapi.a1.by'  AND P2P_TLS_SNI like '%a1.by' THEN 'A1 site'
+    	WHEN P2P_TLS_SNI = 'lifegoapi.life.com.by' THEN 'life app'
+    	WHEN P2P_TLS_SNI != 'lifegoapi.life.com.by'  AND P2P_TLS_SNI like '%life.com.by' THEN 'life site'
+    	WHEN P2P_TLS_SNI LIKE '%.music.yandex.%' THEN 'yandex music (не весь трафик)'
+    	WHEN P2P_TLS_SNI LIKE '%kinopoisk.ru' THEN 'Кинопоиск (не весь трафик)'
+    	WHEN P2P_TLS_SNI LIKE '%.yandex.%' THEN 'yandex весь трафик (music, Кинопоиск и др.)'
+    	WHEN SN_CHARGING_ACTION ='charge-65556' THEN 'ivi'
+    	WHEN P2P_TLS_SNI LIKE '%zvuk.com' OR P2P_TLS_SNI LIKE '%kraken.rambler.ru' OR P2P_TLS_SNI LIKE '%zvooq.com' THEN 'СберЗвук'
+    	WHEN P2P_TLS_SNI LIKE '%okko.tv' OR P2P_TLS_SNI LIKE '%playfamily.ru' THEN 'OKKO'
+    END AS application,
+    SUM(BYTES_DOWNLINK) AS dl, SUM(BYTES_UPLINK) AS ul, dl+ul AS sum_dl_ul, 'MOBILE' AS RatType
+    FROM DPI.FLOW_SHARDED fs 
+    WHERE Date(END_TIME) = yesterday()-{len_date}
+    AND (
+    	P2P_TLS_SNI like '%a1.by' 
+    	OR P2P_TLS_SNI like '%life.com.by'
+    	OR P2P_TLS_SNI LIKE '%.yandex.%'
+    	OR P2P_TLS_SNI LIKE '%kinopoisk.ru'
+    	OR SN_CHARGING_ACTION ='charge-65556' -- ivi
+    	OR P2P_TLS_SNI LIKE '%zvuk.com' OR P2P_TLS_SNI LIKE '%kraken.rambler.ru' OR P2P_TLS_SNI LIKE '%zvooq.com'
+    	OR P2P_TLS_SNI LIKE '%okko.tv' OR P2P_TLS_SNI LIKE '%playfamily.ru'
+    	)
+    GROUP BY day_date, RADIUS_ID, application
+    """
+    result = client.execute(sqlcode)
+    # Выводим результат сделанного запроса
+    print(result)
+    # сохранем результат в csv
+    filenamevoka = 'C:/vlagutik/выгрузки из БД/clients_web_services/_clients_web_services_Сбор_информации_о_пользовании_отдельными_в_202203' + str(
+        (37 - int(len_date))) + '.csv'  # + str(date.today().year) + "-" + str(date.today().month - 1) + '.csv'
+    with open(filenamevoka, 'w', newline='') as fp:
+        csvw = csv.writer(fp, delimiter=";")
+        csvw.writerows(result)
+
+
+for i in range(36, 37, 1):
+    len_date_in = str(i)
+    export_request(len_date_in)
