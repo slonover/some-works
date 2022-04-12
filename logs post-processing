@@ -1,0 +1,118 @@
+# Для автоматизации постобработки логов трейсинга уровней сигнала и качетва U2000 в 3G
+# Программа автоматически разбивает, фильтрует и сортирует, подсчитывает количество измерений
+# и находит мин, макс, среднее значение уровней, а также процент измерений в каждом из диапазонов согласно СТБ1904 и сохраняет в exel файл
+
+import pandas as pd
+from tkinter import *
+from tkinter import messagebox as mb
+from tkinter import filedialog as fd
+
+
+# открытие файла
+def insert_text():
+    try:
+        file_name = fd.askopenfilename()
+        f = open(file_name)
+        s = f.read().replace('"', '')  # заменили ковычки но файл оставили без изменения
+        s = s.replace(', MonitorPeriod(s): 0.5)', '')  # удалили лишние в заголовках но файл оставили без изменения
+        f.close()
+
+        # сохраняем файл без ковычек как новый
+        f = open('замена ковычек.csv', 'w')
+        # s = text.get(1.0, END)
+        f.write(s)
+        f.close()
+
+        # поиск полного заголовка столбцов
+        tim = []
+        for i in open('замена ковычек.csv'):
+
+            starts_with_Time = i.startswith("Time")
+            if starts_with_Time == True and len(i) > len(tim):
+                tim = i
+        # формирование файла с полным заголовком и данными
+        with open('замена ковычек.csv') as infile, open('формирование одного заголовка.csv', "w") as outfile:
+            outfile.write(tim)
+            for line in infile:
+                if "Time" not in line:
+                    outfile.write(line)
+
+        obrabotka()
+
+    #   text.insert(1.0, s)
+
+    except FileNotFoundError:
+        mb.showinfo("Внимание", "Файл не загружен")
+
+
+# обработка результатов трейсинга
+def obrabotka():
+    df = pd.read_csv('формирование одного заголовка.csv')
+    del df['Time']
+    min = []
+    max = []
+    mean = []
+    count = []
+    count88 = []
+    count88_93 = []
+    count93_103 = []
+    count103 = []
+    for i in df:
+        min.append(df[i].min())
+        max.append(df[i].max())
+        mean.append(df[i].mean())
+        count.append(df[i].count())
+        count88.append(round((df[i][df[i] >= -88].count() / df[i].count() * 100), 2))
+        count88_93.append(round((df[i][(df[i] < -88)&(df[i] >= -93)].count() / df[i].count() * 100), 2))
+        count93_103.append(round((df[i][(df[i] < -93)&(df[i] >= -103)].count() / df[i].count() * 100), 2))
+        count103.append(round((df[i][df[i] < -103].count() / df[i].count() * 100), 2))
+        print(i)
+    # print(min)
+    columns = df.columns
+    # print(columns)
+    data = [min, max, mean, count, count88, count88_93, count93_103, count103]
+    result = pd.DataFrame(data=data, columns=columns)
+    # print(result)
+    result = result.T
+    result.columns = ['min', 'max', 'среднее', 'количество', '>=-88', '<-88..>=-93', '<-93..>=103', '<-103']
+    # print('ниже столбец min')
+    print(result['количество'])
+    # print(result.index)
+    result = result.sort_values(by='количество', ascending=False)
+    print(result)
+
+    # сохраняем результат в таблицу
+    writer = pd.ExcelWriter('Результаты трейсинга.xlsx', engine='xlsxwriter')
+    result.to_excel(writer, 'Sheet1')
+    writer.save()
+    text.insert(1.0, result)
+    return result
+
+
+# сохранение результата
+def extract_text():
+    try:
+        file_name = fd.asksaveasfilename(defaultextension="*.xlsx", filetypes=(("Excel files", "*.xlsx"),
+                                                                               ("All files", "*.*")))
+        writer = pd.ExcelWriter(file_name, engine='xlsxwriter')
+        obrabotka().to_excel(writer, 'Sheet1')
+        writer.save()
+    except FileNotFoundError:
+        mb.showinfo("Внимание", "Файл не сохранён")
+
+
+def delete_text():
+    answer = mb.askyesno("Подтверждение", message="Вы хотите удалить текст?")
+    if answer == True:
+        text.delete(0.0, END)
+
+
+root = Tk()
+text = Text(width=100, height=30)
+text.grid(columnspan=2)
+Button(text="Открыть", command=insert_text).grid(row=1, sticky=E)
+Button(text="Сохранить", command=extract_text).grid(row=1, column=1, sticky=W)
+Button(text="Очистить", command=delete_text).grid(row=1, column=1)
+root.mainloop()
+
+
